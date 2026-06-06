@@ -1,0 +1,32 @@
+current: v2
+variants:
+  v1:
+    template: |
+      RIDER: {d_lo}-{d_hi}km preferred, {e_lo}-{e_hi}m elevation, tags: {tags}
+      REQUEST: "{prompt}"
+      Return JSON route recipe.
+  v2:
+    template: |
+      RIDER TASTE PROFILE:
+      Preferred distance: {d_lo}–{d_hi} km (median {d_med} km)
+      Preferred elevation: {e_lo}–{e_hi} m ({vkm} m/km)
+      Grade mix: {pct_flat}% flat / {pct_rolling}% rolling / {pct_steep}% steep
+      Avg climbs per ride: {climbs}
+      Favors sustained climbs: {sustained} | Favors punchy: {punchy}
+      Typical effort shape: {shape}
+      Explorer index: {novelty:.0%} new roads
+      Prefers loops: {loops}
+      Tags: {tags}
+
+      USER REQUEST: "{prompt}"
+
+      Instructions:
+      - Honor explicit distance/elevation if the user named numbers.
+      - If vague, use the upper end of their preferred range.
+      - Anchor climb_profile and novelty to this rider's actual history.
+      - distance_influence: 50 = scenic, 300 = strictly shortest qualifying path.
+      - target_distance_m = midpoint of distance range in meters.
+
+      Return ONLY valid JSON with keys: distance_km, elevation_m, climb_profile,
+      climb_position, min_climbs, max_climbs, traffic_tolerance, surface,
+      route_shape, novelty, effort_intent, mood, distance_influence, target_distance_m
