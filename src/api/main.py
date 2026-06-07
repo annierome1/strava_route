@@ -77,9 +77,9 @@ _dns_patched = _install_dns_patch()
 
 
 def _prime_etc_hosts() -> str:
-    """Resolve the Supabase project hostname via DoH (Cloudflare 1.1.1.1 raw IP,
-    no DNS needed) and write it into /etc/hosts so every DNS lookup succeeds —
-    including the sync supabase-py client and JWKS fetches."""
+    """Resolve Supabase hostname via Cloudflare DoH JSON API (raw IP 1.1.1.1,
+    no DNS needed) and inject into /etc/hosts. JSON API follows CNAME chains
+    and returns final A records, unlike the binary DNS wire format."""
     hostname = (
         os.environ.get("SUPABASE_URL", "")
         .replace("https://", "").replace("http://", "")
@@ -88,24 +88,28 @@ def _prime_etc_hosts() -> str:
     if not hostname or "supabase.co" not in hostname:
         return f"skipped:{hostname or 'no_url'}"
     try:
-        import dns.query, dns.message, dns.rdatatype
-        q = dns.message.make_query(hostname, dns.rdatatype.A)
-        resp = dns.query.https(q, "https://1.1.1.1/dns-query", timeout=6)
-        ips = [
-            str(rd)
-            for rrset in resp.answer
-            for rd in rrset
-            if rrset.rdtype == 1  # A record
-        ]
+        import http.client, ssl, json, urllib.parse
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        conn = http.client.HTTPSConnection("1.1.1.1", context=ctx, timeout=6)
+        conn.request(
+            "GET",
+            f"/dns-query?name={urllib.parse.quote(hostname)}&type=A",
+            headers={"Accept": "application/dns-json"},
+        )
+        data = json.loads(conn.getresponse().read())
+        conn.close()
+        ips = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
         if ips:
             with open("/etc/hosts", "a") as fh:
                 fh.write("\n# railway-dns-fix\n")
                 for ip in ips:
                     fh.write(f"{ip} {hostname}\n")
             return f"ok:{','.join(ips)}"
-        return "no_a_records"
+        return f"no_a:{data.get('Answer', data.get('Status'))}"
     except Exception as e:
-        return f"error:{type(e).__name__}:{e}"
+        return f"error:{type(e).__name__}:{str(e)[:120]}"
 
 
 _hosts_primed = _prime_etc_hosts()
