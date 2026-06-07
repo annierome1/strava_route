@@ -1,114 +1,10 @@
 import os
-import socket as _socket
 import secrets
 import time
 import uuid
 import dataclasses
 from typing import Optional
 from datetime import datetime, timezone
-
-# DNS resolution fix for Railway containers whose system resolver is broken.
-# Three strategies tried in order: UDP → TCP → DNS-over-HTTPS (port 443, IP-direct).
-# Results are cached in-process. Falls back to system resolver if all fail.
-def _install_dns_patch() -> str:
-    _cache: dict[str, str] = {}
-
-    def _resolve(host: str) -> str | None:
-        if host in _cache:
-            return _cache[host]
-        try:
-            import dns.resolver as _dr
-            # UDP
-            try:
-                r = _dr.Resolver(configure=False)
-                r.nameservers = ['8.8.8.8', '1.1.1.1']
-                r.timeout = 3
-                r.lifetime = 3
-                ip = str(r.resolve(host, 'A')[0])
-                _cache[host] = ip
-                return ip
-            except Exception:
-                pass
-            # TCP
-            try:
-                r = _dr.Resolver(configure=False)
-                r.nameservers = ['8.8.8.8', '1.1.1.1']
-                r.use_tcp = True
-                r.timeout = 3
-                r.lifetime = 3
-                ip = str(r.resolve(host, 'A')[0])
-                _cache[host] = ip
-                return ip
-            except Exception:
-                pass
-            # DNS-over-HTTPS via Cloudflare IP (no DNS needed to reach 1.1.1.1)
-            try:
-                import dns.query
-                import dns.message
-                import dns.rdatatype
-                q = dns.message.make_query(host, dns.rdatatype.A)
-                resp = dns.query.https(q, 'https://1.1.1.1/dns-query', timeout=5)
-                for rrset in resp.answer:
-                    for rd in rrset:
-                        ip = str(rd)
-                        _cache[host] = ip
-                        return ip
-            except Exception:
-                pass
-        except ImportError:
-            pass
-        return None
-
-    _orig = _socket.getaddrinfo
-
-    def _patched(host, port, family=0, type=0, proto=0, flags=0):
-        if not host or host[0].isdigit() or host == 'localhost':
-            return _orig(host, port, family, type, proto, flags)
-        ip = _resolve(host)
-        if ip:
-            return _orig(ip, port, family, type, proto, flags)
-        return _orig(host, port, family, type, proto, flags)
-
-    _socket.getaddrinfo = _patched
-    return "installed"
-
-
-_dns_patched = _install_dns_patch()
-
-
-def _prime_etc_hosts() -> str:
-    """Inject Supabase hostname → IP mapping into /etc/hosts.
-
-    Railway intercepts DNS for supabase.co at the network level. Bypass it by
-    writing known IPs directly into /etc/hosts, which takes priority over DNS.
-
-    IPs come from SUPABASE_HOST_IPS env var (comma-separated). Set this in
-    Railway to the resolved IPs for your Supabase project hostname.
-    """
-    hostname = (
-        os.environ.get("SUPABASE_URL", "")
-        .replace("https://", "").replace("http://", "")
-        .split("/")[0].strip("'\"")
-    )
-    if not hostname or "supabase.co" not in hostname:
-        return f"skipped:{hostname or 'no_url'}"
-
-    static = os.environ.get("SUPABASE_HOST_IPS", "").strip()
-    ips = [ip.strip() for ip in static.split(",") if ip.strip()] if static else []
-    if not ips:
-        return "no_ips_configured"
-
-    try:
-        with open("/etc/hosts", "a") as fh:
-            fh.write("\n# railway-dns-fix\n")
-            for ip in ips:
-                fh.write(f"{ip} {hostname}\n")
-        return f"ok:{','.join(ips)}"
-    except Exception as e:
-        return f"error:{type(e).__name__}:{str(e)[:120]}"
-
-
-_hosts_primed = _prime_etc_hosts()
 
 import httpx
 import structlog
@@ -144,34 +40,6 @@ from src.api.auth import get_current_user
 load_dotenv()
 log = structlog.get_logger()
 
-
-def _startup_diagnostics() -> None:
-    import socket
-    supabase_url = os.environ.get("SUPABASE_URL", "")
-    hostname = supabase_url.replace("https://", "").replace("http://", "").split("/")[0]
-    dns_ok = False
-    if hostname:
-        try:
-            socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
-            dns_ok = True
-        except Exception as e:
-            log.error("startup_dns_failed", hostname=hostname, error=str(e))
-
-    jwk_raw = os.environ.get("SUPABASE_JWT_JWK", "")
-    log.info(
-        "startup_env",
-        supabase_url=supabase_url[:40] if supabase_url else "MISSING",
-        dns_ok=dns_ok,
-        has_jwk=bool(jwk_raw.strip()),
-        jwk_prefix=repr(jwk_raw[:30]) if jwk_raw else "MISSING",
-        has_jwt_x=bool(os.environ.get("SUPABASE_JWT_X", "").strip()),
-        has_jwt_y=bool(os.environ.get("SUPABASE_JWT_Y", "").strip()),
-        has_jwt_secret=bool(os.environ.get("SUPABASE_JWT_SECRET", "").strip()),
-        dns_patch_active=_dns_patched,
-        hosts_primed=_hosts_primed,
-    )
-
-
 app = FastAPI(
     title="Strava AI Route Planner",
     description="Routes based on who you are as a rider.",
@@ -184,13 +52,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from fastapi.responses import JSONResponse
-
-@app.exception_handler(Exception)
-async def _unhandled(request: Request, exc: Exception):
-    log.error("unhandled_exception", path=str(request.url.path), error=repr(exc))
-    return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable"})
 
 gen_logger = GenerationLogger()
 
@@ -753,48 +614,9 @@ async def get_profile(user_id: str = Depends(get_current_user)):
     return taste_profile_to_dict(taste)
 
 
-@app.on_event("startup")
-async def startup_event():
-    _startup_diagnostics()
-
-
 @app.get("/health")
 async def health():
-    import socket
-
-    dns = {}
-    supabase_host = os.environ.get("SUPABASE_URL", "").replace("https://", "").split("/")[0]
-    for host in ["google.com", supabase_host or "supabase.co"]:
-        try:
-            socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
-            dns[host] = "ok"
-        except Exception as e:
-            dns[host] = str(e)[:80]
-
-    # Test raw TCP to well-known IPs — confirms if outbound port 443 works at all
-    tcp = {}
-    for ip, port in [("1.1.1.1", 443), ("8.8.8.8", 443)]:
-        try:
-            s = socket.create_connection((ip, port), timeout=3)
-            s.close()
-            tcp[f"{ip}:{port}"] = "ok"
-        except Exception as e:
-            tcp[f"{ip}:{port}"] = str(e)[:80]
-
-    try:
-        resolv = open("/etc/resolv.conf").read().strip()
-    except Exception:
-        resolv = "unreadable"
-
-    return {
-        "status": "ok",
-        "version": "2.0.0",
-        "dns_patch": _dns_patched,
-        "hosts_primed": _hosts_primed,
-        "dns": dns,
-        "tcp_ip": tcp,
-        "resolv_conf": resolv,
-    }
+    return {"status": "ok", "version": "2.0.0"}
 
 
 @app.get("/config")
