@@ -40,6 +40,32 @@ from src.api.auth import get_current_user
 load_dotenv()
 log = structlog.get_logger()
 
+
+def _startup_diagnostics() -> None:
+    import socket
+    supabase_url = os.environ.get("SUPABASE_URL", "")
+    hostname = supabase_url.replace("https://", "").replace("http://", "").split("/")[0]
+    dns_ok = False
+    if hostname:
+        try:
+            socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
+            dns_ok = True
+        except Exception as e:
+            log.error("startup_dns_failed", hostname=hostname, error=str(e))
+
+    jwk_raw = os.environ.get("SUPABASE_JWT_JWK", "")
+    log.info(
+        "startup_env",
+        supabase_url=supabase_url[:40] if supabase_url else "MISSING",
+        dns_ok=dns_ok,
+        has_jwk=bool(jwk_raw.strip()),
+        jwk_prefix=repr(jwk_raw[:30]) if jwk_raw else "MISSING",
+        has_jwt_x=bool(os.environ.get("SUPABASE_JWT_X", "").strip()),
+        has_jwt_y=bool(os.environ.get("SUPABASE_JWT_Y", "").strip()),
+        has_jwt_secret=bool(os.environ.get("SUPABASE_JWT_SECRET", "").strip()),
+    )
+
+
 app = FastAPI(
     title="Strava AI Route Planner",
     description="Routes based on who you are as a rider.",
@@ -612,6 +638,11 @@ async def dna_status(user_id: str = Depends(get_current_user)):
 async def get_profile(user_id: str = Depends(get_current_user)):
     taste = await _load_taste_profile(user_id)
     return taste_profile_to_dict(taste)
+
+
+@app.on_event("startup")
+async def startup_event():
+    _startup_diagnostics()
 
 
 @app.get("/health")

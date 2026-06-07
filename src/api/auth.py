@@ -19,15 +19,26 @@ _jwks_cache: dict | None = None   # {kid: public_key}
 
 
 def _key_from_env() -> object | None:
-    """Load public key from SUPABASE_JWT_JWK env var (single JWK JSON string)."""
+    """Load EC public key from env vars. Three formats tried in order:
+    1. SUPABASE_JWT_JWK  — full JWK as a JSON string
+    2. SUPABASE_JWT_X + SUPABASE_JWT_Y  — raw base64url coordinates (no JSON)
+    """
     jwk_str = os.environ.get("SUPABASE_JWT_JWK", "").strip()
-    if not jwk_str:
-        return None
-    try:
-        return jwt.algorithms.ECAlgorithm.from_jwk(jwk_str)
-    except Exception as e:
-        log.error("jwt_jwk_env_invalid", error=str(e))
-        return None
+    if jwk_str:
+        try:
+            return jwt.algorithms.ECAlgorithm.from_jwk(jwk_str)
+        except Exception as e:
+            log.error("jwt_jwk_env_invalid", raw=repr(jwk_str[:120]), error=str(e))
+
+    x = os.environ.get("SUPABASE_JWT_X", "").strip()
+    y = os.environ.get("SUPABASE_JWT_Y", "").strip()
+    if x and y:
+        try:
+            return jwt.algorithms.ECAlgorithm.from_jwk({"kty": "EC", "crv": "P-256", "x": x, "y": y})
+        except Exception as e:
+            log.error("jwt_coords_invalid", x_len=len(x), y_len=len(y), error=str(e))
+
+    return None
 
 
 async def _get_public_key(kid: str | None) -> object | None:
