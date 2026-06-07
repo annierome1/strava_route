@@ -4,14 +4,13 @@ Supports both EC (P-256 / ES256) keys — current Supabase default — and
 legacy HS256 shared secrets.
 
 Key resolution order for ES256:
-  1. SUPABASE_JWT_PUBLIC_KEY env var (PEM) — no network call, preferred in prod
+  1. SUPABASE_JWT_JWK env var (single JWK as JSON string) — no network call
   2. JWKS fetch from Supabase auth endpoint — fallback, cached in-process
 """
 import os
 import jwt
 import httpx
 import structlog
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from fastapi import Header, HTTPException
 
 log = structlog.get_logger()
@@ -20,14 +19,14 @@ _jwks_cache: dict | None = None   # {kid: public_key}
 
 
 def _key_from_env() -> object | None:
-    """Load public key from SUPABASE_JWT_PUBLIC_KEY env var (PEM format)."""
-    pem = os.environ.get("SUPABASE_JWT_PUBLIC_KEY", "").strip()
-    if not pem:
+    """Load public key from SUPABASE_JWT_JWK env var (single JWK JSON string)."""
+    jwk_str = os.environ.get("SUPABASE_JWT_JWK", "").strip()
+    if not jwk_str:
         return None
     try:
-        return load_pem_public_key(pem.encode())
+        return jwt.algorithms.ECAlgorithm.from_jwk(jwk_str)
     except Exception as e:
-        log.error("jwt_public_key_env_invalid", error=str(e))
+        log.error("jwt_jwk_env_invalid", error=str(e))
         return None
 
 
