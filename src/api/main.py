@@ -79,6 +79,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    log.error("unhandled_exception", path=str(request.url.path), error=repr(exc))
+    return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable"})
+
 gen_logger = GenerationLogger()
 
 # Short-lived in-memory state store for Strava OAuth (state → {user_id, exp})
@@ -647,7 +654,22 @@ async def startup_event():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0"}
+    import socket
+    dns = {}
+    for host in ["google.com", "supabase.co", os.environ.get("SUPABASE_URL", "").replace("https://", "").split("/")[0]]:
+        if not host:
+            continue
+        try:
+            socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+            dns[host] = "ok"
+        except Exception as e:
+            dns[host] = str(e)
+    try:
+        with open("/etc/resolv.conf") as f:
+            resolv = f.read().strip()
+    except Exception:
+        resolv = "unreadable"
+    return {"status": "ok", "version": "2.0.0", "dns": dns, "resolv_conf": resolv}
 
 
 @app.get("/config")
