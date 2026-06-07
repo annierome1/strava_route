@@ -77,9 +77,14 @@ _dns_patched = _install_dns_patch()
 
 
 def _prime_etc_hosts() -> str:
-    """Resolve Supabase hostname via Cloudflare DoH JSON API (raw IP 1.1.1.1,
-    no DNS needed) and inject into /etc/hosts. JSON API follows CNAME chains
-    and returns final A records, unlike the binary DNS wire format."""
+    """Inject Supabase hostname → IP mapping into /etc/hosts.
+
+    Railway intercepts DNS for supabase.co at the network level. Bypass it by
+    writing known IPs directly into /etc/hosts, which takes priority over DNS.
+
+    IPs come from SUPABASE_HOST_IPS env var (comma-separated). Set this in
+    Railway to the resolved IPs for your Supabase project hostname.
+    """
     hostname = (
         os.environ.get("SUPABASE_URL", "")
         .replace("https://", "").replace("http://", "")
@@ -87,27 +92,18 @@ def _prime_etc_hosts() -> str:
     )
     if not hostname or "supabase.co" not in hostname:
         return f"skipped:{hostname or 'no_url'}"
+
+    static = os.environ.get("SUPABASE_HOST_IPS", "").strip()
+    ips = [ip.strip() for ip in static.split(",") if ip.strip()] if static else []
+    if not ips:
+        return "no_ips_configured"
+
     try:
-        import http.client, ssl, json, urllib.parse
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        conn = http.client.HTTPSConnection("1.1.1.1", context=ctx, timeout=6)
-        conn.request(
-            "GET",
-            f"/dns-query?name={urllib.parse.quote(hostname)}&type=A",
-            headers={"Accept": "application/dns-json"},
-        )
-        data = json.loads(conn.getresponse().read())
-        conn.close()
-        ips = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
-        if ips:
-            with open("/etc/hosts", "a") as fh:
-                fh.write("\n# railway-dns-fix\n")
-                for ip in ips:
-                    fh.write(f"{ip} {hostname}\n")
-            return f"ok:{','.join(ips)}"
-        return f"no_a:{data.get('Answer', data.get('Status'))}"
+        with open("/etc/hosts", "a") as fh:
+            fh.write("\n# railway-dns-fix\n")
+            for ip in ips:
+                fh.write(f"{ip} {hostname}\n")
+        return f"ok:{','.join(ips)}"
     except Exception as e:
         return f"error:{type(e).__name__}:{str(e)[:120]}"
 
