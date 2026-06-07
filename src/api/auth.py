@@ -23,7 +23,7 @@ def _key_from_env() -> object | None:
     1. SUPABASE_JWT_JWK  — full JWK as a JSON string
     2. SUPABASE_JWT_X + SUPABASE_JWT_Y  — raw base64url coordinates (no JSON)
     """
-    jwk_str = os.environ.get("SUPABASE_JWT_JWK", "").strip()
+    jwk_str = os.environ.get("SUPABASE_JWT_JWK", "").strip().strip("'\"")
     if jwk_str:
         try:
             return jwt.algorithms.ECAlgorithm.from_jwk(jwk_str)
