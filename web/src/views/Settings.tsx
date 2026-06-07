@@ -143,6 +143,12 @@ export function Settings() {
           Read-only access — your data never leaves this app.
         </p>
 
+        {import.meta.env.DEV && (
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'monospace' }}>
+            API: {import.meta.env.VITE_API_URL || '(empty — using Vite proxy)'}
+          </div>
+        )}
+
         {stravaStatus?.connected ? (
           <div className="strava-connected-card">
             <div className="strava-connected-left">
