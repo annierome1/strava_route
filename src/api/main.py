@@ -75,6 +75,41 @@ def _install_dns_patch() -> str:
 
 _dns_patched = _install_dns_patch()
 
+
+def _prime_etc_hosts() -> str:
+    """Resolve the Supabase project hostname via DoH (Cloudflare 1.1.1.1 raw IP,
+    no DNS needed) and write it into /etc/hosts so every DNS lookup succeeds —
+    including the sync supabase-py client and JWKS fetches."""
+    hostname = (
+        os.environ.get("SUPABASE_URL", "")
+        .replace("https://", "").replace("http://", "")
+        .split("/")[0].strip("'\"")
+    )
+    if not hostname or "supabase.co" not in hostname:
+        return f"skipped:{hostname or 'no_url'}"
+    try:
+        import dns.query, dns.message, dns.rdatatype
+        q = dns.message.make_query(hostname, dns.rdatatype.A)
+        resp = dns.query.https(q, "https://1.1.1.1/dns-query", timeout=6)
+        ips = [
+            str(rd)
+            for rrset in resp.answer
+            for rd in rrset
+            if rrset.rdtype == 1  # A record
+        ]
+        if ips:
+            with open("/etc/hosts", "a") as fh:
+                fh.write("\n# railway-dns-fix\n")
+                for ip in ips:
+                    fh.write(f"{ip} {hostname}\n")
+            return f"ok:{','.join(ips)}"
+        return "no_a_records"
+    except Exception as e:
+        return f"error:{type(e).__name__}:{e}"
+
+
+_hosts_primed = _prime_etc_hosts()
+
 import httpx
 import structlog
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
@@ -133,6 +168,7 @@ def _startup_diagnostics() -> None:
         has_jwt_y=bool(os.environ.get("SUPABASE_JWT_Y", "").strip()),
         has_jwt_secret=bool(os.environ.get("SUPABASE_JWT_SECRET", "").strip()),
         dns_patch_active=_dns_patched,
+        hosts_primed=_hosts_primed,
     )
 
 
@@ -754,6 +790,7 @@ async def health():
         "status": "ok",
         "version": "2.0.0",
         "dns_patch": _dns_patched,
+        "hosts_primed": _hosts_primed,
         "dns": dns,
         "tcp_ip": tcp,
         "resolv_conf": resolv,
