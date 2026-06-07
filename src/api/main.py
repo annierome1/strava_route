@@ -1,10 +1,39 @@
 import os
+import socket as _socket
 import secrets
 import time
 import uuid
 import dataclasses
 from typing import Optional
 from datetime import datetime, timezone
+
+# Patch socket.getaddrinfo to use Google DNS (8.8.8.8) directly.
+# Railway containers sometimes fail to resolve external hostnames via the
+# system resolver; bypassing it with dnspython fixes Supabase + JWKS calls.
+def _install_dns_patch() -> bool:
+    try:
+        import dns.resolver as _dr
+        _res = _dr.Resolver(configure=False)
+        _res.nameservers = ['8.8.8.8', '8.8.4.4']
+        _res.timeout = 5
+        _res.lifetime = 10
+        _orig = _socket.getaddrinfo
+
+        def _patched(host, port, family=0, type=0, proto=0, flags=0):
+            if not host or host[0].isdigit() or host == 'localhost':
+                return _orig(host, port, family, type, proto, flags)
+            try:
+                ip = str(_res.resolve(host, 'A')[0])
+                return _orig(ip, port, family, type, proto, flags)
+            except Exception:
+                return _orig(host, port, family, type, proto, flags)
+
+        _socket.getaddrinfo = _patched
+        return True
+    except Exception:
+        return False
+
+_dns_patched = _install_dns_patch()
 
 import httpx
 import structlog
@@ -63,6 +92,7 @@ def _startup_diagnostics() -> None:
         has_jwt_x=bool(os.environ.get("SUPABASE_JWT_X", "").strip()),
         has_jwt_y=bool(os.environ.get("SUPABASE_JWT_Y", "").strip()),
         has_jwt_secret=bool(os.environ.get("SUPABASE_JWT_SECRET", "").strip()),
+        dns_patch_active=_dns_patched,
     )
 
 
