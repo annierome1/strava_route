@@ -1,24 +1,80 @@
-"""FastAPI dependency: validates a Supabase JWT, returns the user_id."""
+"""FastAPI dependency: validates a Supabase JWT.
+
+Supports both EC (P-256 / ES256) keys — current Supabase default — and
+legacy HS256 shared secrets. JWKS keys are fetched once at first use and
+cached in-process so there is at most one network call per server lifetime.
+"""
+import os
+import jwt
+import httpx
 import structlog
 from fastapi import Header, HTTPException
-from .db import get_supabase
 
 log = structlog.get_logger()
+
+_jwks_cache: dict | None = None   # {kid: public_key_pem}
+_hs256_secret: str = ""
+
+
+async def _get_public_key(kid: str | None) -> str | None:
+    """Fetch JWKS from Supabase and cache. Returns the PEM for the given kid."""
+    global _jwks_cache
+    if _jwks_cache is None:
+        supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{supabase_url}/auth/v1/.well-known/jwks.json")
+                resp.raise_for_status()
+                _jwks_cache = {}
+                for key_data in resp.json().get("keys", []):
+                    key_id = key_data.get("kid")
+                    public_key = jwt.algorithms.ECAlgorithm.from_jwk(key_data)
+                    _jwks_cache[key_id] = public_key
+                log.info("jwks_loaded", key_count=len(_jwks_cache))
+        except Exception as e:
+            log.error("jwks_fetch_failed", error=str(e))
+            return None
+    return _jwks_cache.get(kid) if kid else (next(iter(_jwks_cache.values()), None) if _jwks_cache else None)
 
 
 async def get_current_user(authorization: str | None = Header(default=None)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
-        log.warning("auth_failed", reason="missing_header", has_header=bool(authorization))
         raise HTTPException(status_code=401, detail="Not authenticated")
+
     token = authorization.removeprefix("Bearer ")
+
     try:
-        response = get_supabase().auth.get_user(token)
-        if not response.user:
-            log.warning("auth_failed", reason="no_user_returned")
+        header = jwt.get_unverified_header(token)
+        alg = header.get("alg", "")
+        kid = header.get("kid")
+
+        if alg == "HS256":
+            # Legacy shared-secret path
+            secret = os.environ.get("SUPABASE_JWT_SECRET", "")
+            if not secret:
+                raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET not configured")
+            payload = jwt.decode(token, secret, algorithms=["HS256"], options={"verify_aud": False})
+
+        elif alg in ("ES256", "RS256"):
+            # JWKS public-key path
+            public_key = await _get_public_key(kid)
+            if not public_key:
+                raise HTTPException(status_code=500, detail="Could not load JWT signing key")
+            payload = jwt.decode(token, public_key, algorithms=[alg], options={"verify_aud": False})
+
+        else:
+            log.warning("auth_unknown_alg", alg=alg)
+            raise HTTPException(status_code=401, detail="Unsupported token algorithm")
+
+        user_id = payload.get("sub")
+        if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return response.user.id
+        return user_id
+
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
     except HTTPException:
         raise
     except Exception as e:
-        log.warning("auth_failed", reason="exception", error=str(e))
+        log.warning("auth_failed", error=str(e))
         raise HTTPException(status_code=401, detail="Invalid token")

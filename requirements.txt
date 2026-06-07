@@ -9,3 +9,5 @@ structlog>=24.0.0
 numpy>=1.26.0
 scipy>=1.13.0
 supabase>=2.4.0
+PyJWT>=2.8.0
+cryptography>=42.0.0
