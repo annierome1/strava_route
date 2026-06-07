@@ -4,10 +4,13 @@
   "installCommand": "cd web && npm ci",
   "framework": null,
   "rewrites": [
-    {
-      "source": "/((?!assets/).*)",
-      "destination": "/index.html"
-    }
+    { "source": "/route/:path*",   "destination": "https://stravaroute-production.up.railway.app/route/:path*" },
+    { "source": "/routes/:path*",  "destination": "https://stravaroute-production.up.railway.app/routes/:path*" },
+    { "source": "/dna/:path*",     "destination": "https://stravaroute-production.up.railway.app/dna/:path*" },
+    { "source": "/strava/:path*",  "destination": "https://stravaroute-production.up.railway.app/strava/:path*" },
+    { "source": "/config",         "destination": "https://stravaroute-production.up.railway.app/config" },
+    { "source": "/health",         "destination": "https://stravaroute-production.up.railway.app/health" },
+    { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ],
   "headers": [
     {

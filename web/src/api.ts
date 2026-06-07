@@ -3,7 +3,7 @@ import { supabase } from './lib/supabase'
 
 // In dev: Vite proxy forwards /route /dna etc. to localhost:8000
 // In production: VITE_API_URL points to the deployed backend (e.g. Railway)
-const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+const BASE = ''
 
 async function authHeaders(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession()
