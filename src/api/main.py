@@ -7,31 +7,71 @@ import dataclasses
 from typing import Optional
 from datetime import datetime, timezone
 
-# Patch socket.getaddrinfo to use Google DNS (8.8.8.8) directly.
-# Railway containers sometimes fail to resolve external hostnames via the
-# system resolver; bypassing it with dnspython fixes Supabase + JWKS calls.
-def _install_dns_patch() -> bool:
-    try:
-        import dns.resolver as _dr
-        _res = _dr.Resolver(configure=False)
-        _res.nameservers = ['8.8.8.8', '8.8.4.4']
-        _res.timeout = 5
-        _res.lifetime = 10
-        _orig = _socket.getaddrinfo
+# DNS resolution fix for Railway containers whose system resolver is broken.
+# Three strategies tried in order: UDP → TCP → DNS-over-HTTPS (port 443, IP-direct).
+# Results are cached in-process. Falls back to system resolver if all fail.
+def _install_dns_patch() -> str:
+    _cache: dict[str, str] = {}
 
-        def _patched(host, port, family=0, type=0, proto=0, flags=0):
-            if not host or host[0].isdigit() or host == 'localhost':
-                return _orig(host, port, family, type, proto, flags)
+    def _resolve(host: str) -> str | None:
+        if host in _cache:
+            return _cache[host]
+        try:
+            import dns.resolver as _dr
+            # UDP
             try:
-                ip = str(_res.resolve(host, 'A')[0])
-                return _orig(ip, port, family, type, proto, flags)
+                r = _dr.Resolver(configure=False)
+                r.nameservers = ['8.8.8.8', '1.1.1.1']
+                r.timeout = 3
+                r.lifetime = 3
+                ip = str(r.resolve(host, 'A')[0])
+                _cache[host] = ip
+                return ip
             except Exception:
-                return _orig(host, port, family, type, proto, flags)
+                pass
+            # TCP
+            try:
+                r = _dr.Resolver(configure=False)
+                r.nameservers = ['8.8.8.8', '1.1.1.1']
+                r.use_tcp = True
+                r.timeout = 3
+                r.lifetime = 3
+                ip = str(r.resolve(host, 'A')[0])
+                _cache[host] = ip
+                return ip
+            except Exception:
+                pass
+            # DNS-over-HTTPS via Cloudflare IP (no DNS needed to reach 1.1.1.1)
+            try:
+                import dns.query
+                import dns.message
+                import dns.rdatatype
+                q = dns.message.make_query(host, dns.rdatatype.A)
+                resp = dns.query.https(q, 'https://1.1.1.1/dns-query', timeout=5)
+                for rrset in resp.answer:
+                    for rd in rrset:
+                        ip = str(rd)
+                        _cache[host] = ip
+                        return ip
+            except Exception:
+                pass
+        except ImportError:
+            pass
+        return None
 
-        _socket.getaddrinfo = _patched
-        return True
-    except Exception:
-        return False
+    _orig = _socket.getaddrinfo
+
+    def _patched(host, port, family=0, type=0, proto=0, flags=0):
+        if not host or host[0].isdigit() or host == 'localhost':
+            return _orig(host, port, family, type, proto, flags)
+        ip = _resolve(host)
+        if ip:
+            return _orig(ip, port, family, type, proto, flags)
+        return _orig(host, port, family, type, proto, flags)
+
+    _socket.getaddrinfo = _patched
+    return "installed"
+
 
 _dns_patched = _install_dns_patch()
 
@@ -685,21 +725,39 @@ async def startup_event():
 @app.get("/health")
 async def health():
     import socket
+
     dns = {}
-    for host in ["google.com", "supabase.co", os.environ.get("SUPABASE_URL", "").replace("https://", "").split("/")[0]]:
-        if not host:
-            continue
+    supabase_host = os.environ.get("SUPABASE_URL", "").replace("https://", "").split("/")[0]
+    for host in ["google.com", supabase_host or "supabase.co"]:
         try:
             socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
             dns[host] = "ok"
         except Exception as e:
-            dns[host] = str(e)
+            dns[host] = str(e)[:80]
+
+    # Test raw TCP to well-known IPs — confirms if outbound port 443 works at all
+    tcp = {}
+    for ip, port in [("1.1.1.1", 443), ("8.8.8.8", 443)]:
+        try:
+            s = socket.create_connection((ip, port), timeout=3)
+            s.close()
+            tcp[f"{ip}:{port}"] = "ok"
+        except Exception as e:
+            tcp[f"{ip}:{port}"] = str(e)[:80]
+
     try:
-        with open("/etc/resolv.conf") as f:
-            resolv = f.read().strip()
+        resolv = open("/etc/resolv.conf").read().strip()
     except Exception:
         resolv = "unreadable"
-    return {"status": "ok", "version": "2.0.0", "dns": dns, "resolv_conf": resolv}
+
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "dns_patch": _dns_patched,
+        "dns": dns,
+        "tcp_ip": tcp,
+        "resolv_conf": resolv,
+    }
 
 
 @app.get("/config")
