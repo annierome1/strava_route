@@ -1,5 +1,5 @@
 export type Unit = 'metric' | 'imperial'
-export type View = 'dream' | 'training' | 'settings' | 'library'
+export type View = 'dashboard' | 'dream' | 'training' | 'library' | 'settings'
 export type Variant = 'match' | 'harder' | 'scenic'
 
 export interface GeoJSONLine {

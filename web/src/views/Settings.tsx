@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useApp, useUnit } from '../context'
 import { api } from '../api'
 import { supabase } from '../lib/supabase'
@@ -9,14 +9,60 @@ export function Settings() {
   const { profile, setProfile, homeLocation, setHomeLocation, showToast, user } = useApp()
   const { fmtDist, distUnit, fmtElevNum, elevUnit, fmtVertPace } = useUnit()
 
-  // Home location input state
   const [pendingHome, setPendingHome] = useState<LocationCoords | null>(homeLocation)
   const [buildingDNA, setBuildingDNA] = useState(false)
+  const [stravaStatus, setStravaStatus] = useState<{ connected: boolean; athlete_name?: string } | null>(null)
+  const [stravaLoading, setStravaLoading] = useState(false)
+
+  // Fetch Strava connection status on mount
+  useEffect(() => {
+    api.strava.status().then(setStravaStatus).catch(() => setStravaStatus({ connected: false }))
+  }, [])
+
+  // Handle redirect back from Strava OAuth (?strava=connected / denied / error)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const result = params.get('strava')
+    if (!result) return
+    window.history.replaceState({}, '', window.location.pathname)
+    if (result === 'connected') {
+      showToast('Strava connected!')
+      api.strava.status().then(setStravaStatus).catch(() => {})
+    } else if (result === 'denied') {
+      showToast('Strava authorization was cancelled', 'error')
+    } else {
+      showToast('Strava connection failed — try again', 'error')
+    }
+  }, [showToast])
 
   function saveHome() {
     if (!pendingHome) { showToast('Select a location from the dropdown first', 'error'); return }
     setHomeLocation(pendingHome)
     showToast('Home location saved')
+  }
+
+  async function connectStrava() {
+    setStravaLoading(true)
+    try {
+      const { url } = await api.strava.connect()
+      window.location.href = url
+    } catch (e: unknown) {
+      showToast(e instanceof Error ? e.message : 'Could not start Strava connection', 'error')
+      setStravaLoading(false)
+    }
+  }
+
+  async function disconnectStrava() {
+    setStravaLoading(true)
+    try {
+      await api.strava.disconnect()
+      setStravaStatus({ connected: false })
+      showToast('Strava disconnected')
+    } catch (e: unknown) {
+      showToast(e instanceof Error ? e.message : 'Disconnect failed', 'error')
+    } finally {
+      setStravaLoading(false)
+    }
   }
 
   async function buildDNA() {
@@ -89,6 +135,35 @@ export function Settings() {
         )}
       </div>
 
+      {/* ── Strava Connection ── */}
+      <div className="settings-section">
+        <div className="settings-section-title">Strava Connection</div>
+        <p style={{ color: 'var(--text-2)', fontSize: 13.5, lineHeight: 1.6, marginBottom: 16 }}>
+          Connect your Strava account so Route AI can read your ride history and build your personal preference model.
+          Read-only access — your data never leaves this app.
+        </p>
+
+        {stravaStatus?.connected ? (
+          <div className="strava-connected-card">
+            <div className="strava-connected-left">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="#FC4C02"><path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/></svg>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{stravaStatus.athlete_name || 'Strava account'}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>Connected · read-only</div>
+              </div>
+            </div>
+            <button className="btn-secondary" onClick={disconnectStrava} disabled={stravaLoading}>
+              {stravaLoading ? '…' : 'Disconnect'}
+            </button>
+          </div>
+        ) : (
+          <button className="btn-strava" onClick={connectStrava} disabled={stravaLoading}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/></svg>
+            {stravaLoading ? 'Redirecting to Strava…' : 'Connect Strava'}
+          </button>
+        )}
+      </div>
+
       {/* ── Route DNA ── */}
       <div className="settings-section">
         <div className="settings-section-title">Rider Profile · Route DNA</div>
@@ -99,24 +174,12 @@ export function Settings() {
               Analyse your Strava history to build a personal preference model from your actual rides.
               This shapes all generated routes to match how you truly ride.
             </p>
-
-            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 16, marginBottom: 20 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--text-3)', marginBottom: 10 }}>Strava OAuth setup</div>
-              <ol style={{ paddingLeft: 18, color: 'var(--text-2)', fontSize: 13, lineHeight: 2.2, marginBottom: 12 }}>
-                <li>Create a Strava API app at <a href="https://www.strava.com/settings/api" target="_blank" rel="noreferrer" style={{ color: 'var(--orange)' }}>strava.com/settings/api</a> — note your Client ID &amp; Secret</li>
-                <li>Authorize via URL: <code style={{ background: '#fff', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>
-                  https://www.strava.com/oauth/authorize?client_id=YOUR_ID&amp;redirect_uri=http://localhost&amp;response_type=code&amp;scope=read_all,activity:read_all
-                </code></li>
-                <li>Exchange the <code style={{ background: '#fff', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>code=</code> for tokens via <code style={{ background: '#fff', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>curl -X POST https://www.strava.com/oauth/token</code></li>
-                <li>Add <code style={{ background: '#fff', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>STRAVA_CLIENT_ID</code>, <code style={{ background: '#fff', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>STRAVA_CLIENT_SECRET</code>, <code style={{ background: '#fff', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>STRAVA_REFRESH_TOKEN</code> to <code style={{ background: '#fff', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>.env</code></li>
-                <li>Restart the server — tokens auto-refresh every 6 hours</li>
-              </ol>
-              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>Read-only access. Used locally only.</div>
-            </div>
-
-            <button className="btn-primary" disabled={buildingDNA} onClick={buildDNA}>
-              {buildingDNA ? 'Connecting to Strava…' : 'Build my Route DNA'}
+            <button className="btn-primary" disabled={buildingDNA || !stravaStatus?.connected} onClick={buildDNA} title={!stravaStatus?.connected ? 'Connect Strava first' : undefined}>
+              {buildingDNA ? 'Analysing rides…' : 'Build my Route DNA'}
             </button>
+            {!stravaStatus?.connected && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-3)' }}>Connect Strava above first</div>
+            )}
           </>
         ) : (
           <>

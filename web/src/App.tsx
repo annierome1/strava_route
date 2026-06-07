@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useApp } from './context'
 import { api } from './api'
-import { Sidebar } from './components/Sidebar'
+import { TopNav } from './components/TopNav'
 import { Toast } from './components/Toast'
+import { Dashboard } from './views/Dashboard'
 import { DreamRide } from './views/DreamRide'
 import { Training } from './views/Training'
 import { Settings } from './views/Settings'
@@ -13,14 +14,13 @@ import type { View } from './types'
 
 export default function App() {
   const { setProfile, setMbToken, session } = useApp()
-  const [view, setView] = useState<View>('dream')
+  const [view, setView] = useState<View>('dashboard')
   const [authReady, setAuthReady] = useState(false)
   const [apiStatus, setApiStatus] = useState<{ state: 'ok' | 'err' | 'busy' | 'idle'; label: string }>({
     state: 'idle',
     label: 'Connecting…',
   })
 
-  // Wait for Supabase to restore session before deciding what to show
   useEffect(() => {
     supabase.auth.getSession().then(() => setAuthReady(true))
   }, [])
@@ -53,12 +53,17 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar view={view} setView={setView} apiStatus={apiStatus} />
+      <TopNav view={view} setView={setView} apiStatus={apiStatus} />
       <main>
-        {view === 'dream'    && <DreamRide />}
-        {view === 'training' && <Training />}
-        {view === 'settings' && <Settings />}
-        {view === 'library'  && <Library />}
+          {view === 'dashboard' && <Dashboard setView={setView} />}
+          {view !== 'dashboard' && (
+            <div className="view">
+              {view === 'dream'    && <DreamRide />}
+              {view === 'training' && <Training />}
+              {view === 'library'  && <Library />}
+              {view === 'settings' && <Settings />}
+            </div>
+          )}
       </main>
       <Toast />
     </div>

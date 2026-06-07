@@ -1,17 +1,20 @@
 import os
+import secrets
+import time
 import uuid
 import dataclasses
 from typing import Optional
 from datetime import datetime, timezone
 
+import httpx
 import structlog
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from src.platform.strava_client import StravaMCPClient
+from src.platform.strava_client import StravaMCPClient, STRAVA_TOKEN
 from src.platform.logger import GenerationLogger
 from src.layers.route_dna.extractor import extract_route_features
 from src.layers.route_dna.taste_profile import (
@@ -30,6 +33,7 @@ from src.api.db import (
     load_library_route_stubs, load_library_routes,
     save_route, delete_route,
     load_library_for_cleanup, delete_routes_batch, load_library_bboxes,
+    load_strava_tokens, save_strava_tokens, delete_strava_tokens,
 )
 from src.api.auth import get_current_user
 
@@ -49,8 +53,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-strava = StravaMCPClient(os.environ.get("STRAVA_MCP_URL", "https://mcp.strava.com/sse"))
 gen_logger = GenerationLogger()
+
+# Short-lived in-memory state store for Strava OAuth (state → {user_id, exp})
+_oauth_states: dict[str, dict] = {}
+
+STRAVA_AUTH_URL = "https://www.strava.com/oauth/authorize"
+STRAVA_SCOPE    = "read_all,activity:read_all"
 
 
 # --- Request / Response models ---
@@ -279,6 +288,95 @@ async def _recent_fatigue_index() -> Optional[float]:
 
 # --- Endpoints ---
 
+# ── Strava OAuth ──────────────────────────────────────────────────────────────
+
+@app.post("/strava/connect")
+async def strava_connect(request: Request, user_id: str = Depends(get_current_user)):
+    """Return the Strava authorization URL. Frontend navigates the browser there."""
+    client_id = os.environ.get("STRAVA_CLIENT_ID", "")
+    if not client_id:
+        raise HTTPException(status_code=500, detail="STRAVA_CLIENT_ID not configured on server.")
+
+    redirect_uri = os.environ.get(
+        "STRAVA_REDIRECT_URI",
+        str(request.base_url).rstrip("/") + "/strava/callback"
+    )
+    state = secrets.token_urlsafe(32)
+    _oauth_states[state] = {"user_id": user_id, "exp": time.time() + 600}
+
+    url = (
+        f"{STRAVA_AUTH_URL}"
+        f"?client_id={client_id}"
+        f"&redirect_uri={redirect_uri}"
+        f"&response_type=code"
+        f"&approval_prompt=auto"
+        f"&scope={STRAVA_SCOPE}"
+        f"&state={state}"
+    )
+    return {"url": url}
+
+
+@app.get("/strava/callback")
+async def strava_callback(code: str = "", state: str = "", error: str = ""):
+    """Strava redirects here after the user authorizes (or denies)."""
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
+    if error or not code:
+        return RedirectResponse(f"{frontend_url}/settings?strava=denied")
+
+    entry = _oauth_states.pop(state, None)
+    if not entry or entry["exp"] < time.time():
+        return RedirectResponse(f"{frontend_url}/settings?strava=expired")
+
+    user_id       = entry["user_id"]
+    client_id     = os.environ.get("STRAVA_CLIENT_ID", "")
+    client_secret = os.environ.get("STRAVA_CLIENT_SECRET", "")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(STRAVA_TOKEN, data={
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "code":          code,
+            "grant_type":    "authorization_code",
+        })
+
+    if resp.status_code != 200:
+        log.error("strava_token_exchange_failed", status=resp.status_code)
+        return RedirectResponse(f"{frontend_url}/settings?strava=error")
+
+    data    = resp.json()
+    athlete = data.get("athlete", {})
+    save_strava_tokens(user_id, {
+        "access_token":  data["access_token"],
+        "refresh_token": data["refresh_token"],
+        "expires_at":    data["expires_at"],
+        "athlete_id":    athlete.get("id"),
+        "athlete_name":  f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip(),
+    })
+    log.info("strava_connected", user_id=user_id, athlete_id=athlete.get("id"))
+    return RedirectResponse(f"{frontend_url}/settings?strava=connected")
+
+
+@app.get("/strava/status")
+async def strava_status(user_id: str = Depends(get_current_user)):
+    tokens = load_strava_tokens(user_id)
+    if not tokens:
+        return {"connected": False}
+    return {
+        "connected":    True,
+        "athlete_id":   tokens.get("athlete_id"),
+        "athlete_name": tokens.get("athlete_name"),
+    }
+
+
+@app.delete("/strava/disconnect")
+async def strava_disconnect(user_id: str = Depends(get_current_user)):
+    delete_strava_tokens(user_id)
+    return {"disconnected": True}
+
+
+# ── Route generation ──────────────────────────────────────────────────────────
+
 @app.post("/route/dream", response_model=RouteResponse)
 async def dream_route(req: DreamRideRequest, user_id: str = Depends(get_current_user)):
     taste = await _load_taste_profile(user_id)
@@ -438,16 +536,25 @@ async def irl_route(req: DreamRideRequest, user_id: str = Depends(get_current_us
 
 @app.post("/dna/build")
 async def build_dna(user_id: str = Depends(get_current_user)):
-    if not os.environ.get("STRAVA_ACCESS_TOKEN"):
+    tokens = load_strava_tokens(user_id)
+    if not tokens:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "STRAVA_ACCESS_TOKEN is not set. "
-                "Get your token at https://www.strava.com/settings/api and add it to your .env file."
-            )
+            detail="Connect your Strava account first — go to Settings and click 'Connect Strava'."
         )
+
+    def _on_refresh(new_tokens: dict):
+        save_strava_tokens(user_id, new_tokens)
+
+    client = StravaMCPClient.from_tokens(
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        expires_at=tokens["expires_at"],
+        on_refresh=_on_refresh,
+    )
+
     try:
-        activities = await strava.get_all_cycling_activities()
+        activities = await client.get_all_cycling_activities()
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -460,7 +567,7 @@ async def build_dna(user_id: str = Depends(get_current_user)):
     features = []
     for a in activities:
         try:
-            streams = await strava.get_activity_streams(a["id"])
+            streams = await client.get_activity_streams(a["id"])
             feat = extract_route_features(a, streams)
             features.append(feat)
             if streams.get("latlng", {}).get("data"):

@@ -55,6 +55,12 @@ export const api = {
 
   cleanupLibrary: () => req<{ deleted: number; remaining: number }>('/routes/library/cleanup', { method: 'POST' }),
 
+  strava: {
+    status: () => req<{ connected: boolean; athlete_name?: string; athlete_id?: number }>('/strava/status'),
+    connect: () => req<{ url: string }>('/strava/connect', { method: 'POST' }),
+    disconnect: () => req('/strava/disconnect', { method: 'DELETE' }),
+  },
+
   geocode: async (query: string, token: string): Promise<{ lat: number; lng: number; name: string }[]> => {
     const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json` +
       `?access_token=${token}&types=address,place,poi&limit=5&language=en`

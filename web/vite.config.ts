@@ -10,6 +10,7 @@ export default defineConfig({
       '/routes': { target: 'http://localhost:8000', changeOrigin: true },
       '/dna':    { target: 'http://localhost:8000', changeOrigin: true },
       '/irl':    { target: 'http://localhost:8000', changeOrigin: true },
+      '/strava': { target: 'http://localhost:8000', changeOrigin: true },
       '/config': { target: 'http://localhost:8000', changeOrigin: true },
       '/health': { target: 'http://localhost:8000', changeOrigin: true },
     },

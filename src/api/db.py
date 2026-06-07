@@ -151,3 +151,28 @@ def load_library_bboxes(user_id: str) -> list:
         .execute()
     )
     return [r["bbox_json"] for r in result.data if r.get("bbox_json") is not None]
+
+
+# ── Strava connections ────────────────────────────────────────────────────────
+
+def load_strava_tokens(user_id: str) -> Optional[dict]:
+    result = (
+        get_supabase()
+        .table("strava_connections")
+        .select("access_token, refresh_token, expires_at, athlete_id, athlete_name")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def save_strava_tokens(user_id: str, tokens: dict):
+    get_supabase().table("strava_connections").upsert({
+        "user_id": user_id,
+        **tokens,
+    }).execute()
+
+
+def delete_strava_tokens(user_id: str):
+    get_supabase().table("strava_connections").delete().eq("user_id", user_id).execute()

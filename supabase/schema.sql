@@ -45,3 +45,16 @@ create policy "own saved_routes"    on saved_routes    for all using (auth.uid()
 -- Indexes for common query patterns
 create index if not exists taste_profiles_user_created on taste_profiles(user_id, created_at desc);
 create index if not exists saved_routes_user_created   on saved_routes(user_id, created_at desc);
+
+-- Strava OAuth tokens: one row per user (upserted on each connect)
+create table if not exists strava_connections (
+  user_id      uuid references auth.users(id) on delete cascade primary key,
+  athlete_id   bigint,
+  athlete_name text,
+  access_token  text not null,
+  refresh_token text not null,
+  expires_at    bigint not null  -- Unix timestamp
+);
+
+alter table strava_connections enable row level security;
+create policy "own strava_connection" on strava_connections for all using (auth.uid() = user_id);

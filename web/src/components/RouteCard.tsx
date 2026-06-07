@@ -6,7 +6,7 @@ import type { Route } from '../types'
 const VARIANT_META = {
   match:  { label: 'Best Match', cls: 'match',  lineColor: '#22c55e' },
   harder: { label: 'Harder',     cls: 'harder', lineColor: '#f59e0b' },
-  scenic: { label: 'Scenic',     cls: 'scenic', lineColor: '#6366f1' },
+  scenic: { label: 'Scenic',     cls: 'scenic', lineColor: '#818cf8' },
 } as const
 
 interface Props {
@@ -40,17 +40,20 @@ export function RouteCard({ route, onExportGPX, onExportStrava }: Props) {
 
     map.on('load', () => {
       const coords = route.geojson.coordinates
-      map.addSource('route', { type: 'geojson', data: { type: 'Feature', geometry: route.geojson as unknown as GeoJSON.Geometry, properties: {} } })
+      map.addSource('route', {
+        type: 'geojson',
+        data: { type: 'Feature', geometry: route.geojson as unknown as GeoJSON.Geometry, properties: {} },
+      })
       map.addLayer({
         id: 'route-line', type: 'line', source: 'route',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': meta.lineColor, 'line-width': 3, 'line-opacity': 0.9 },
+        paint: { 'line-color': meta.lineColor, 'line-width': 3.5, 'line-opacity': 0.95 },
       })
       const lngs = coords.map(c => c[0])
       const lats = coords.map(c => c[1])
       map.fitBounds(
         [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-        { padding: 22, duration: 0 }
+        { padding: 24, duration: 0 }
       )
     })
 
@@ -64,17 +67,15 @@ export function RouteCard({ route, onExportGPX, onExportStrava }: Props) {
           ? <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
           : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#444', fontSize: 12 }}>No Mapbox token</div>
         }
+        <div className="route-card-badge">
+          <span className={`variant-badge ${meta.cls}`}>{meta.label}</span>
+        </div>
+        {route.rank === 1 && (
+          <div className="route-card-rank">★</div>
+        )}
       </div>
 
       <div className="route-card-body">
-        <div className="route-card-header">
-          <span className={`variant-badge ${meta.cls}`}>{meta.label}</span>
-          {route.rank === 1 && <span className="rank-star">★</span>}
-          {route.is_similar_to_saved && (
-            <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 'auto' }} title="Similar to a saved route">📚 saved before</span>
-          )}
-        </div>
-
         <div className="route-stats">
           <span>{fmtDist(route.distance_km)}</span>
           <span className="stat-unit"> {distUnit()}</span>
@@ -85,10 +86,7 @@ export function RouteCard({ route, onExportGPX, onExportStrava }: Props) {
 
         <div className="route-score-row">
           <div className="score-bar-track">
-            <div
-              className={`score-bar-fill ${scoreClass}`}
-              style={{ width: `${scorePct}%` }}
-            />
+            <div className={`score-bar-fill ${scoreClass}`} style={{ width: `${scorePct}%` }} />
           </div>
           <span className="score-label">{scorePct}%</span>
         </div>
@@ -97,12 +95,16 @@ export function RouteCard({ route, onExportGPX, onExportStrava }: Props) {
           <div className="route-explanation">{route.explanation}</div>
         )}
 
+        {route.is_similar_to_saved && (
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>Similar to a saved route</div>
+        )}
+
         <div className="route-card-footer">
           <button className="btn-export" onClick={e => { e.stopPropagation(); onExportGPX() }}>
             <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 1a.5.5 0 0 1 .5.5v7.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7.5 9.293V1.5A.5.5 0 0 1 8 1zM1 13.5a.5.5 0 0 1 .5-.5h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1-.5-.5z"/>
             </svg>
-            Download GPX
+            GPX
           </button>
           <button className="btn-export strava" onClick={e => { e.stopPropagation(); onExportStrava() }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
