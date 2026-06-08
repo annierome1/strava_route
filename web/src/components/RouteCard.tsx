@@ -145,27 +145,13 @@ ${trkpts}
   document.body.removeChild(a)
 }
 
-export async function pushToStrava(
+export function pushToStrava(
   route: Route,
-  userPrompt: string,
+  _userPrompt: string,
   onSuccess: (msg: string) => void,
-  onError: (msg: string) => void,
-): Promise<void> {
-  try {
-    await api.uploadRouteToStrava({
-      variant:     route.variant,
-      distance_km: route.distance_km,
-      user_prompt: userPrompt,
-      explanation: route.explanation ?? '',
-      geojson:     route.geojson,
-    })
-    onSuccess('Uploading to Strava — check your activities in a minute')
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Strava upload failed'
-    if (msg.includes('activity:write') || msg.includes('reconnect') || msg.includes('Connect Strava')) {
-      onError('Reconnect Strava in Settings to enable uploads')
-    } else {
-      onError(msg)
-    }
-  }
+  _onError: (msg: string) => void,
+): void {
+  exportGPX(route)
+  setTimeout(() => window.open('https://www.strava.com/routes/new', '_blank', 'noopener'), 400)
+  onSuccess('GPX saved to Downloads — drag it into the Strava page that just opened')
 }

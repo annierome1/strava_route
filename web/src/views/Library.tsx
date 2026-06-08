@@ -53,18 +53,10 @@ export function Library() {
     }
   }
 
-  async function pushToStrava(id: string) {
-    try {
-      await api.pushRouteToStrava(id)
-      showToast('Uploading to Strava — check your activities in a minute')
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Strava upload failed'
-      if (msg.includes('activity:write') || msg.includes('reconnect')) {
-        showToast('Reconnect Strava in Settings to enable uploads', 'error')
-      } else {
-        showToast(msg, 'error')
-      }
-    }
+  function pushToStrava(route: LibraryRoute) {
+    exportGPX(route as unknown as import('../types').Route)
+    setTimeout(() => window.open('https://www.strava.com/routes/new', '_blank', 'noopener'), 400)
+    showToast('GPX saved to Downloads — drag it into the Strava page that just opened')
   }
 
   const filtered = useMemo(() => {
@@ -172,8 +164,8 @@ export function Library() {
 
       {!loading && filtered.length > 0 && (
         view === 'list'
-          ? <LibList routes={filtered} onDelete={deleteRoute} onPushStrava={pushToStrava} />
-          : <LibGrid routes={filtered} onDelete={deleteRoute} onPushStrava={pushToStrava} />
+          ? <LibList routes={filtered} onDelete={deleteRoute} onPushStrava={r => pushToStrava(r)} />
+          : <LibGrid routes={filtered} onDelete={deleteRoute} onPushStrava={r => pushToStrava(r)} />
       )}
     </div>
   )
@@ -186,7 +178,7 @@ function LibList({
 }: {
   routes: LibraryRoute[]
   onDelete: (id: string) => void
-  onPushStrava: (id: string) => void
+  onPushStrava: (route: LibraryRoute) => void
 }) {
   const { fmtDist, distUnit, fmtElev } = useUnit()
 
@@ -215,7 +207,7 @@ function LibList({
             </div>
             <div className="lib-actions">
               <button className="lib-btn" onClick={() => exportGPX(r as unknown as import('../types').Route)}>GPX</button>
-              <button className="lib-btn" onClick={() => onPushStrava(r.id)}>Strava ↑</button>
+              <button className="lib-btn" onClick={() => onPushStrava(r)}>Strava ↑</button>
               <button className="lib-btn delete" onClick={() => onDelete(r.id)}>✕</button>
             </div>
           </div>
@@ -232,7 +224,7 @@ function LibGrid({
 }: {
   routes: LibraryRoute[]
   onDelete: (id: string) => void
-  onPushStrava: (id: string) => void
+  onPushStrava: (route: LibraryRoute) => void
 }) {
   const { fmtDist, distUnit, fmtElev } = useUnit()
 
@@ -262,7 +254,7 @@ function LibGrid({
               </div>
               <div className="lib-grid-actions">
                 <button className="lib-btn" style={{ flex: 1 }} onClick={() => exportGPX(r as unknown as import('../types').Route)}>GPX</button>
-                <button className="lib-btn" onClick={() => onPushStrava(r.id)}>Strava ↑</button>
+                <button className="lib-btn" onClick={() => onPushStrava(r)}>Strava ↑</button>
                 <button className="lib-btn delete" onClick={() => onDelete(r.id)}>✕</button>
               </div>
             </div>
