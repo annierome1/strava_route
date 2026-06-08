@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import mapboxgl from 'mapbox-gl'
 import { useApp, useUnit } from '../context'
+import { api } from '../api'
 import type { Route } from '../types'
 
 const VARIANT_META = {
@@ -144,7 +145,27 @@ ${trkpts}
   document.body.removeChild(a)
 }
 
-export function exportToStrava(route: Route): void {
-  exportGPX(route)
-  setTimeout(() => window.open('https://www.strava.com/routes/new', '_blank', 'noopener'), 400)
+export async function pushToStrava(
+  route: Route,
+  userPrompt: string,
+  onSuccess: (msg: string) => void,
+  onError: (msg: string) => void,
+): Promise<void> {
+  try {
+    await api.uploadRouteToStrava({
+      variant:     route.variant,
+      distance_km: route.distance_km,
+      user_prompt: userPrompt,
+      explanation: route.explanation ?? '',
+      geojson:     route.geojson,
+    })
+    onSuccess('Uploading to Strava — check your activities in a minute')
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Strava upload failed'
+    if (msg.includes('activity:write') || msg.includes('reconnect') || msg.includes('Connect Strava')) {
+      onError('Reconnect Strava in Settings to enable uploads')
+    } else {
+      onError(msg)
+    }
+  }
 }

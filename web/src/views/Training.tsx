@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useApp } from '../context'
 import { api } from '../api'
-import { RouteCard, exportGPX, exportToStrava } from '../components/RouteCard'
+import { RouteCard, exportGPX, pushToStrava } from '../components/RouteCard'
 import type { Route } from '../types'
 
 const ADAPTATIONS = [
@@ -127,7 +127,12 @@ export function Training() {
                 key={`${route.variant}-${i}`}
                 route={route}
                 onExportGPX={() => exportGPX(route)}
-                onExportStrava={() => exportToStrava(route)}
+                onExportStrava={() => pushToStrava(
+                  route,
+                  result.title,
+                  msg => showToast(msg),
+                  msg => showToast(msg, 'error'),
+                )}
               />
             ))}
           </div>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useApp, useUnit } from '../context'
 import { api } from '../api'
 import { RouteSVGPreview } from '../components/RouteSVGPreview'
-import { exportGPX, exportToStrava } from '../components/RouteCard'
+import { exportGPX, pushToStrava } from '../components/RouteCard'
 import type { LibraryRoute, View } from '../types'
 
 interface Props {
@@ -23,7 +23,7 @@ function todayLabel() {
 }
 
 export function Dashboard({ setView }: Props) {
-  const { user, profile } = useApp()
+  const { user, profile, showToast } = useApp()
   const { fmtDist, distUnit, fmtElev } = useUnit()
 
   const [stravaConnected, setStravaConnected] = useState<boolean | null>(null)
@@ -191,7 +191,12 @@ export function Dashboard({ setView }: Props) {
                     </div>
                     <div className="dash-route-actions">
                       <button className="lib-btn" onClick={() => exportGPX(r as unknown as import('../types').Route)}>GPX</button>
-                      <button className="lib-btn" onClick={() => exportToStrava(r as unknown as import('../types').Route)}>
+                      <button className="lib-btn" onClick={() => pushToStrava(
+                        r as unknown as import('../types').Route,
+                        r.user_prompt,
+                        msg => showToast(msg),
+                        msg => showToast(msg, 'error'),
+                      )}>
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="#FC4C02"><path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/></svg>
                       </button>
                     </div>
@@ -329,7 +334,12 @@ function QuickGenerate({ setView, profileReady }: { setView: (v: View) => void; 
                   </div>
                   <div className="dash-gen-card-actions">
                     <button className="lib-btn" onClick={() => exportGPX(r)}>GPX</button>
-                    <button className="lib-btn" onClick={() => exportToStrava(r)}>Strava</button>
+                    <button className="lib-btn" onClick={() => pushToStrava(
+                      r,
+                      prompt,
+                      msg => showToast(msg),
+                      msg => showToast(msg, 'error'),
+                    )}>Strava</button>
                   </div>
                 </div>
               )

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useApp, useUnit } from '../context'
 import { api } from '../api'
 import { LocationInput } from '../components/LocationInput'
-import { RouteCard, exportGPX, exportToStrava } from '../components/RouteCard'
+import { RouteCard, exportGPX, pushToStrava } from '../components/RouteCard'
 import type { LocationCoords, Route, ThinkingStep } from '../types'
 
 const HINTS = [
@@ -197,8 +197,13 @@ export function DreamRide() {
             <RouteCard
               key={`${route.variant}-${i}`}
               route={route}
-              onExportGPX={() => { exportGPX(route); showToast('GPX downloaded — import at strava.com/routes/new') }}
-              onExportStrava={() => exportToStrava(route)}
+              onExportGPX={() => { exportGPX(route); showToast('GPX downloaded') }}
+              onExportStrava={() => pushToStrava(
+                route,
+                userPromptUsed,
+                msg => showToast(msg),
+                msg => showToast(msg, 'error'),
+              )}
             />
           ))}
         </div>

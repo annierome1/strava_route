@@ -58,6 +58,17 @@ export const api = {
   pushRouteToStrava: (id: string) =>
     req<{ upload_id: number; status: string }>(`/routes/library/${id}/push-to-strava`, { method: 'POST' }),
 
+  uploadRouteToStrava: (route: {
+    variant: string
+    distance_km: number
+    user_prompt: string
+    explanation?: string
+    geojson: object
+  }) => req<{ upload_id: number; status: string }>('/strava/upload-route', {
+    method: 'POST',
+    body: JSON.stringify(route),
+  }),
+
   checkStravaUpload: (uploadId: number) =>
     req<{ upload_id: number; status: string; activity_id?: number; error?: string }>(
       `/strava/upload/${uploadId}`
