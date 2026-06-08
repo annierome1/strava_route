@@ -3,7 +3,7 @@ import { useApp, useUnit } from '../context'
 import { api } from '../api'
 import { LocationInput } from '../components/LocationInput'
 import { RouteCard, exportGPX, exportToStrava } from '../components/RouteCard'
-import type { LocationCoords, Route } from '../types'
+import type { LocationCoords, Route, ThinkingStep } from '../types'
 
 const HINTS = [
   { label: 'big climb',     text: 'something long with a big climb in the middle' },
@@ -26,6 +26,8 @@ export function DreamRide() {
   const [routes, setRoutes] = useState<Route[]>([])
   const [recipeExplanation, setRecipeExplanation] = useState('')
   const [userPromptUsed, setUserPromptUsed] = useState('')
+  const [thinkingTrace, setThinkingTrace] = useState<ThinkingStep[]>([])
+  const [showTrace, setShowTrace] = useState(false)
 
   const steps = ['Building your recipe…', 'Generating route candidates…', 'Scoring and ranking…']
 
@@ -48,6 +50,8 @@ export function DreamRide() {
       setRoutes(result.routes)
       setRecipeExplanation(result.recipe_explanation)
       setUserPromptUsed(result.user_prompt)
+      setThinkingTrace(result.thinking_trace ?? [])
+      setShowTrace(false)
     } catch (e: unknown) {
       showToast(e instanceof Error ? e.message : 'Generation failed', 'error')
     } finally {
@@ -144,6 +148,45 @@ export function DreamRide() {
         <div className="recipe-banner">
           <div className="recipe-prompt">"{userPromptUsed}"</div>
           <div>{recipeExplanation}</div>
+        </div>
+      )}
+
+      {/* AI Reasoning trace (collapsible) */}
+      {!loading && thinkingTrace.length > 0 && (
+        <div className="trace-panel">
+          <button className="trace-toggle" onClick={() => setShowTrace(v => !v)}>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" style={{ transform: showTrace ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>
+              <path d="M6 3l5 5-5 5V3z"/>
+            </svg>
+            AI reasoning {showTrace ? '▲' : '▼'}
+            {thinkingTrace.some(s => s.type === 'tool_call') && (
+              <span className="trace-badge">{thinkingTrace.filter(s => s.type === 'tool_call').length} tool call{thinkingTrace.filter(s => s.type === 'tool_call').length !== 1 ? 's' : ''}</span>
+            )}
+          </button>
+          {showTrace && (
+            <div className="trace-body">
+              {thinkingTrace.map((step, i) => {
+                if (step.type === 'finalized' || step.type === 'fallback') return null
+                if (step.type === 'thinking') return (
+                  <div key={i} className="trace-thinking">{step.content}</div>
+                )
+                if (step.type === 'tool_call') {
+                  const label = step.name === 'check_area_novelty'
+                    ? `Checked area novelty → ${(step.result as { novelty_score?: number })?.novelty_score ?? '?'}`
+                    : step.name === 'get_irl_profile'
+                      ? `Fetched IRL profile → ${(step.result as { available?: boolean })?.available ? 'trained' : 'not available'}`
+                      : step.name ?? ''
+                  return (
+                    <div key={i} className="trace-tool">
+                      <span className="trace-tool-icon">⚙</span>
+                      {label}
+                    </div>
+                  )
+                }
+                return null
+              })}
+            </div>
+          )}
         </div>
       )}
 

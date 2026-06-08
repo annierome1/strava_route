@@ -36,6 +36,19 @@ _DI = 1.2
 _ORS_STEEPNESS = {"match": 1, "harder": 3, "scenic": 0}
 
 
+def _irl_steepness_levels(irl_weights: list) -> dict:
+    """
+    Map IRL grade weight → per-variant ORS steepness levels.
+    FEATURE_NAMES index 2 = grade (positive = rider seeks climbing).
+    """
+    grade_w = irl_weights[2] if len(irl_weights) > 2 else 0.0
+    if grade_w > 0.25:   base = 2
+    elif grade_w > 0.1:  base = 1
+    elif grade_w < -0.3: base = 0
+    else:                base = 1
+    return {"match": base, "harder": min(3, base + 1), "scenic": max(0, base - 1)}
+
+
 @dataclass
 class CandidateRoute:
     variant: str
@@ -83,10 +96,11 @@ def _triangle_points(home: tuple, center_bearing: float, target_km: float) -> li
 
 
 async def _fetch_ors(
-    variant: str, points: list, target_km: float, ors_key: str, avoid_surface: str = "none"
+    variant: str, points: list, target_km: float, ors_key: str,
+    avoid_surface: str = "none", steepness: int | None = None,
 ) -> CandidateRoute | None:
     """Route via OpenRouteService cycling-road profile with steepness tuning per variant."""
-    steepness = _ORS_STEEPNESS.get(variant, 1)
+    effective_steepness = steepness if steepness is not None else _ORS_STEEPNESS.get(variant, 1)
     payload = {
         "coordinates": points,
         "elevation": True,
@@ -94,7 +108,7 @@ async def _fetch_ors(
         "preference": "recommended",
         "profile_params": {
             "weightings": {
-                "steepness_difficulty": {"level": steepness}
+                "steepness_difficulty": {"level": effective_steepness}
             }
         },
     }
@@ -291,6 +305,7 @@ async def generate_candidates(
     end: tuple = None,
     is_loop: bool = True,
     library_bboxes: list = None,
+    irl_weights: list = None,
 ) -> list:
     """
     Generate 3 route candidates.
@@ -311,6 +326,7 @@ async def generate_candidates(
     ors_key = os.environ.get("ORS_API_KEY", "")
     use_ors = bool(ors_key)
     avoid_surface = getattr(recipe, "avoid_surface", "none") or "none"
+    irl_levels = _irl_steepness_levels(irl_weights) if irl_weights else None
 
     # Geographic waypoint lookup (Overpass API)
     geo_waypoint = None
@@ -323,7 +339,8 @@ async def generate_candidates(
         async def fetch_p2p(variant: str) -> CandidateRoute | None:
             points = _p2p_points(home, end, variant)
             if use_ors:
-                result = await _fetch_ors(variant, points, mid, ors_key, avoid_surface)
+                steepness = irl_levels[variant] if irl_levels else None
+                result = await _fetch_ors(variant, points, mid, ors_key, avoid_surface, steepness)
                 if result:
                     return result
             return await _fetch_graphhopper(variant, points, recipe, api_key)
@@ -349,7 +366,8 @@ async def generate_candidates(
                     geo_pt = [geo_waypoint[1], geo_waypoint[0]]  # [lng, lat]
                     points = [points[0], geo_pt, points[2], points[3]]
                 if use_ors:
-                    result = await _fetch_ors(variant, points, cfg["target_km"], ors_key, avoid_surface)
+                    steepness = irl_levels[variant] if irl_levels else None
+                    result = await _fetch_ors(variant, points, cfg["target_km"], ors_key, avoid_surface, steepness)
                     if result:
                         if attempt > 0:
                             log.info("bearing_fallback_succeeded", variant=variant,

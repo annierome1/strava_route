@@ -55,6 +55,14 @@ export const api = {
 
   cleanupLibrary: () => req<{ deleted: number; remaining: number }>('/routes/library/cleanup', { method: 'POST' }),
 
+  pushRouteToStrava: (id: string) =>
+    req<{ upload_id: number; status: string }>(`/routes/library/${id}/push-to-strava`, { method: 'POST' }),
+
+  checkStravaUpload: (uploadId: number) =>
+    req<{ upload_id: number; status: string; activity_id?: number; error?: string }>(
+      `/strava/upload/${uploadId}`
+    ),
+
   strava: {
     status: () => req<{ connected: boolean; athlete_name?: string; athlete_id?: number }>('/strava/status'),
     connect: () => req<{ url: string }>('/strava/connect', { method: 'POST' }),

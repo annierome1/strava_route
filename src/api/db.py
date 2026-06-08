@@ -176,3 +176,29 @@ def save_strava_tokens(user_id: str, tokens: dict):
 
 def delete_strava_tokens(user_id: str):
     get_supabase().table("strava_connections").delete().eq("user_id", user_id).execute()
+
+
+# ── IRL models ────────────────────────────────────────────────────────────────
+
+def save_irl_weights(user_id: str, weights: list):
+    get_supabase().table("irl_models").upsert({
+        "user_id": user_id,
+        "weights_json": weights,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+    }).execute()
+
+
+def load_irl_weights(user_id: str) -> Optional[list]:
+    try:
+        result = (
+            get_supabase()
+            .table("irl_models")
+            .select("weights_json")
+            .eq("user_id", user_id)
+            .order("trained_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0]["weights_json"] if result.data else None
+    except Exception:
+        return None

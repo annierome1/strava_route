@@ -1,4 +1,6 @@
 import asyncio
+from typing import Optional
+
 import anthropic
 import structlog
 
@@ -20,13 +22,21 @@ async def generate_dream_ride(
     generation_logger: GenerationLogger,
     end: tuple = None,
     is_loop: bool = True,
+    irl_weights: Optional[list] = None,
 ) -> dict:
     """
-    Full pipeline: prompt → recipe → 3 candidate routes → scored → explained.
+    Full pipeline: prompt → agentic recipe → 3 candidate routes → scored → explained.
     Pass end=(lat,lng) + is_loop=False for point-to-point routes.
+    irl_weights are used to tune ORS steepness and are passed to the recipe builder
+    so Claude can call get_irl_profile during reasoning.
     """
-    # 1. Build recipe (LLM)
-    recipe, recipe_explanation = await build_route_recipe(user_prompt, taste)
+    # 1. Build recipe — agentic loop with tool use (returns thinking trace)
+    recipe, recipe_explanation, thinking_trace = await build_route_recipe(
+        user_prompt, taste,
+        home=home,
+        ride_bboxes=historical_bboxes,
+        irl_weights=irl_weights,
+    )
     log.info("recipe_built", mood=recipe.mood, distance=recipe.distance_km, elevation=recipe.elevation_m)
 
     # 2. Generate 3 candidates (GraphHopper/ORS, parallel)
@@ -34,6 +44,7 @@ async def generate_dream_ride(
         recipe, home, graphhopper_key,
         end=end, is_loop=is_loop,
         library_bboxes=historical_bboxes,
+        irl_weights=irl_weights,
     )
     if not candidates:
         raise RuntimeError("GraphHopper returned no valid routes")
@@ -72,6 +83,7 @@ async def generate_dream_ride(
         "user_prompt": user_prompt,
         "recipe_explanation": recipe_explanation,
         "recipe": recipe.to_dict(),
+        "thinking_trace": thinking_trace,
         "routes": [
             {
                 "variant":     c.variant,

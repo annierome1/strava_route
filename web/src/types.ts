@@ -60,12 +60,22 @@ export interface LocationCoords {
   name: string
 }
 
+export interface ThinkingStep {
+  type: 'thinking' | 'tool_call' | 'finalized' | 'fallback'
+  content?: string
+  name?: string
+  input?: Record<string, unknown>
+  result?: Record<string, unknown>
+  recipe_mood?: string
+}
+
 export interface DreamRideResult {
   user_prompt: string
   recipe_explanation: string
   recipe: Record<string, unknown>
   routes: Route[]
   generation_id: string
+  thinking_trace?: ThinkingStep[]
 }
 
 export interface AppConfig {
