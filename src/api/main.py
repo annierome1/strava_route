@@ -36,6 +36,7 @@ from src.api.db import (
     load_strava_tokens, save_strava_tokens, delete_strava_tokens,
 )
 from src.api.auth import get_current_user
+from src.api import rate_limit
 
 load_dotenv()
 log = structlog.get_logger()
@@ -379,6 +380,7 @@ async def strava_disconnect(user_id: str = Depends(get_current_user)):
 
 @app.post("/route/dream", response_model=RouteResponse)
 async def dream_route(req: DreamRideRequest, user_id: str = Depends(get_current_user)):
+    rate_limit.check(user_id, "route", per_user=10, global_limit=40)
     taste = await _load_taste_profile(user_id)
 
     if req.start_lat is not None and req.start_lng is not None:
@@ -476,6 +478,7 @@ async def cleanup_library_duplicates(user_id: str = Depends(get_current_user)):
 
 @app.post("/route/training", response_model=RouteResponse)
 async def training_route(req: TrainingRouteRequest, user_id: str = Depends(get_current_user)):
+    rate_limit.check(user_id, "route", per_user=10, global_limit=40)
     if req.adaptation not in ADAPTATIONS:
         raise HTTPException(status_code=400, detail=f"Unknown adaptation. Choose: {list(ADAPTATIONS.keys())}")
     taste   = await _load_taste_profile(user_id)
@@ -536,6 +539,7 @@ async def irl_route(req: DreamRideRequest, user_id: str = Depends(get_current_us
 
 @app.post("/dna/build")
 async def build_dna(user_id: str = Depends(get_current_user)):
+    rate_limit.check(user_id, "dna_build", per_user=3, global_limit=15)
     tokens = load_strava_tokens(user_id)
     if not tokens:
         raise HTTPException(
@@ -612,6 +616,11 @@ async def dna_status(user_id: str = Depends(get_current_user)):
 async def get_profile(user_id: str = Depends(get_current_user)):
     taste = await _load_taste_profile(user_id)
     return taste_profile_to_dict(taste)
+
+
+@app.get("/rate-limits")
+async def get_rate_limits(user_id: str = Depends(get_current_user)):
+    return rate_limit.status(user_id)
 
 
 @app.get("/health")
