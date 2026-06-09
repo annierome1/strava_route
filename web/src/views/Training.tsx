@@ -52,21 +52,27 @@ const ADAPTATIONS = [
   },
 ]
 
+const STEPS = ['Building your training recipe…', 'Generating route candidates…', 'Scoring and ranking…']
+
 export function Training() {
   const { profile, showToast } = useApp()
   const [loading, setLoading] = useState<string | null>(null)
+  const [step, setStep] = useState(0)
   const [result, setResult] = useState<{ title: string; explanation: string; routes: Route[] } | null>(null)
 
   async function generate(id: string, name: string) {
     if (!profile) { showToast('Build your Route DNA in Settings first', 'error'); return }
     setLoading(id)
+    setStep(0)
     setResult(null)
+    const timer = setInterval(() => setStep(s => Math.min(s + 1, STEPS.length - 1)), 2200)
     try {
       const data = await api.trainingRoute(id)
       setResult({ title: name + ' Route', explanation: data.recipe_explanation, routes: data.routes })
     } catch (e: unknown) {
       showToast(e instanceof Error ? e.message : 'Generation failed', 'error')
     } finally {
+      clearInterval(timer)
       setLoading(null)
     }
   }
@@ -113,7 +119,26 @@ export function Training() {
         ))}
       </div>
 
-      {result && (
+      {/* Loading state */}
+      <div className={`generating-bar ${loading ? 'visible' : ''}`}>
+        <div className="dot-row"><span/><span/><span/></div>
+        <span>{STEPS[step]}</span>
+      </div>
+
+      {loading && (
+        <div className="skeleton routes-grid visible">
+          {[0,1,2].map(i => (
+            <div key={i} className="skel-card">
+              <div className="skel-map"/>
+              <div className="skel-body">
+                <div className="skel-line w60"/><div className="skel-line w80"/><div className="skel-line w45"/>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {result && !loading && (
         <div className="training-results">
           <div className="results-section-header">
             <div className="results-section-title">{result.title}</div>

@@ -119,7 +119,9 @@ Recipe guidelines:
 - Use get_irl_profile to verify traffic_tolerance and surface align with actual GPS preferences.
 - Call finalize_recipe with the complete recipe and a 2–3 sentence personalised explanation.
 
-USER REQUEST: "{prompt}"
+<user_request>
+{prompt}
+</user_request>
 
 Think, use up to 2 tools, then finalize."""
 

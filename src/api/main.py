@@ -1,3 +1,4 @@
+import math
 import os
 import secrets
 import time
@@ -5,13 +6,15 @@ import uuid
 import dataclasses
 from typing import Optional
 from datetime import datetime, timezone
+from urllib.parse import urlparse
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 import structlog
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from dotenv import load_dotenv
 
 from src.platform.strava_client import StravaMCPClient, STRAVA_TOKEN, map_match_to_segments
@@ -48,11 +51,21 @@ app = FastAPI(
     version="2.0.0"
 )
 
+_FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
+def _allowed_origins() -> list[str]:
+    origins = [_FRONTEND_URL.rstrip("/")]
+    # Always allow localhost variants for local development
+    for port in ("5173", "5174", "8000"):
+        origins.append(f"http://localhost:{port}")
+    return list(dict.fromkeys(origins))   # deduplicate, preserve order
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins(),
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
 )
 
 gen_logger = GenerationLogger()
@@ -73,6 +86,26 @@ class DreamRideRequest(BaseModel):
     end_lat:   Optional[float] = None
     end_lng:   Optional[float] = None
     is_loop:   bool = True
+
+    @field_validator('start_lat', 'end_lat', mode='before')
+    @classmethod
+    def validate_latitude(cls, v):
+        if v is not None:
+            if not math.isfinite(float(v)):
+                raise ValueError('Latitude must be a finite number')
+            if not -90 <= float(v) <= 90:
+                raise ValueError('Latitude must be between -90 and 90')
+        return v
+
+    @field_validator('start_lng', 'end_lng', mode='before')
+    @classmethod
+    def validate_longitude(cls, v):
+        if v is not None:
+            if not math.isfinite(float(v)):
+                raise ValueError('Longitude must be a finite number')
+            if not -180 <= float(v) <= 180:
+                raise ValueError('Longitude must be between -180 and 180')
+        return v
 
 
 class TrainingRouteRequest(BaseModel):
@@ -291,7 +324,7 @@ async def _recent_fatigue_index() -> Optional[float]:
 
 def _route_to_gpx(route: dict, geojson: dict) -> str:
     coords = geojson.get("coordinates", [])
-    name   = f"AI Route — {route.get('variant', '').capitalize()} {route.get('distance_km', 0):.0f}km"
+    name   = xml_escape(f"AI Route — {route.get('variant', '').capitalize()} {route.get('distance_km', 0):.0f}km")
     now    = datetime.now(timezone.utc).isoformat()
     trkpts = []
     for c in coords:
@@ -369,17 +402,22 @@ async def strava_connect(request: Request, user_id: str = Depends(get_current_us
     return {"url": url}
 
 
+def _frontend_redirect(path: str) -> str:
+    """Build a redirect URL that is always within the configured frontend origin."""
+    parsed  = urlparse(_FRONTEND_URL)
+    origin  = f"{parsed.scheme}://{parsed.netloc}"
+    return f"{origin}{path}"
+
+
 @app.get("/strava/callback")
 async def strava_callback(code: str = "", state: str = "", error: str = ""):
     """Strava redirects here after the user authorizes (or denies)."""
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
-
     if error or not code:
-        return RedirectResponse(f"{frontend_url}/settings?strava=denied")
+        return RedirectResponse(_frontend_redirect("/settings?strava=denied"))
 
     entry = _oauth_states.pop(state, None)
     if not entry or entry["exp"] < time.time():
-        return RedirectResponse(f"{frontend_url}/settings?strava=expired")
+        return RedirectResponse(_frontend_redirect("/settings?strava=expired"))
 
     user_id       = entry["user_id"]
     client_id     = os.environ.get("STRAVA_CLIENT_ID", "")
@@ -395,7 +433,7 @@ async def strava_callback(code: str = "", state: str = "", error: str = ""):
 
     if resp.status_code != 200:
         log.error("strava_token_exchange_failed", status=resp.status_code)
-        return RedirectResponse(f"{frontend_url}/settings?strava=error")
+        return RedirectResponse(_frontend_redirect("/settings?strava=error"))
 
     data    = resp.json()
     athlete = data.get("athlete", {})
@@ -407,7 +445,7 @@ async def strava_callback(code: str = "", state: str = "", error: str = ""):
         "athlete_name":  f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip(),
     })
     log.info("strava_connected", user_id=user_id, athlete_id=athlete.get("id"))
-    return RedirectResponse(f"{frontend_url}/settings?strava=connected")
+    return RedirectResponse(_frontend_redirect("/settings?strava=connected"))
 
 
 @app.get("/strava/status")
@@ -588,7 +626,8 @@ async def dream_route(req: DreamRideRequest, user_id: str = Depends(get_current_
                     "Add ORS_API_KEY to your .env file (openrouteservice.org — 10K free req/day)."
                 )
             )
-        raise HTTPException(status_code=500, detail=msg)
+        log.error("dream_route_error", error=msg)
+        raise HTTPException(status_code=500, detail="Route generation failed. Please try again.")
 
     result["routes"] = _flag_duplicates(user_id, result["routes"])
     _save_routes_to_library(user_id, result["routes"], req.prompt, start)
@@ -670,7 +709,8 @@ async def training_route(req: TrainingRouteRequest, user_id: str = Depends(get_c
     except RoutingRateLimitError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        log.error("training_route_error", error=str(e))
+        raise HTTPException(status_code=503, detail="Route generation failed. Please try again.")
     result["generation_id"] = gen_logger.log("training_route_api", recipe.mood, recipe, [])
     return result
 
@@ -746,7 +786,7 @@ async def build_dna(background_tasks: BackgroundTasks, user_id: str = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         log.error("strava_fetch_error", error=str(e))
-        raise HTTPException(status_code=502, detail=f"Strava fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Strava data fetch failed. Please try again.")
 
     if not activities:
         raise HTTPException(status_code=422, detail="No Strava cycling activities found.")
@@ -827,7 +867,7 @@ async def health():
 
 
 @app.get("/config")
-async def config():
+async def config(user_id: str = Depends(get_current_user)):
     return {
         "mapbox_token": os.environ.get("MAPBOX_TOKEN", ""),
         "has_graphhopper": bool(os.environ.get("GRAPHHOPPER_API_KEY")),

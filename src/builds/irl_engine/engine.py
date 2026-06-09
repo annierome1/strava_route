@@ -70,11 +70,18 @@ class MaxEntropyIRL:
         """Returns loss history for convergence monitoring."""
         all_feat = np.array([s.to_features() for s in all_segments])
 
+        # Guard against corrupt segment data before any gradient work
+        if not np.isfinite(all_feat).all():
+            n_bad = int((~np.isfinite(all_feat)).sum())
+            log.warning("irl_invalid_features_replaced", count=n_bad)
+            all_feat = np.nan_to_num(all_feat, nan=0.0, posinf=0.0, neginf=0.0)
+
         # Empirical feature counts: average per-segment features across observed routes
         empirical_fc = np.zeros(len(FEATURE_NAMES))
         for traj in observed_trajectories:
             for seg in traj:
-                empirical_fc += seg.to_features()
+                feat = np.nan_to_num(seg.to_features(), nan=0.0, posinf=0.0, neginf=0.0)
+                empirical_fc += feat
         empirical_fc /= max(len(observed_trajectories), 1)
 
         loss_history = []
