@@ -209,25 +209,46 @@ def _bearing(start: tuple, end: tuple) -> float:
 
 def _smart_bearings(home: tuple, library_bboxes: list) -> tuple:
     """
-    Return 3 center_bearings (120° apart) that avoid the most-explored compass sectors.
+    Return 3 center_bearings (120° apart) that minimise overlap with already-explored
+    compass directions.
 
-    The compass is divided into 6 sectors of 60° each. Two candidate triplets are
-    mutually 120° apart:  A = (30, 150, 270)  and  B = (90, 210, 330).
-    We count how many library routes fall in each triplet's sectors and pick the
-    less-explored one so new routes explore fresh territory.
+    Tests 12 candidate triplets at 10° base increments (0→110°) — each triplet's
+    three arms are 120° apart, so they tile the compass without gaps.  The triplet
+    whose three 60°-wide sectors contain the fewest library-route centroids is chosen.
+
+    A random ±8° jitter is applied to the winning base so repeated calls with the
+    same library still produce geometrically distinct routes.
     """
-    sector_counts = [0] * 6
+    import random
+
+    if not library_bboxes:
+        base = random.randint(0, 119)
+        return (base % 360, (base + 120) % 360, (base + 240) % 360)
+
+    # Precompute centroid bearings from home for every saved route
+    lib_bearings: list[float] = []
     for bbox in library_bboxes:
         try:
             clat = (bbox[0] + bbox[2]) / 2
             clng = (bbox[1] + bbox[3]) / 2
-            b = _bearing(home, (clat, clng))
-            sector_counts[int(b / 60) % 6] += 1
+            lib_bearings.append(_bearing(home, (clat, clng)))
         except Exception:
             pass
-    score_a = sector_counts[0] + sector_counts[2] + sector_counts[4]
-    score_b = sector_counts[1] + sector_counts[3] + sector_counts[5]
-    return (30, 150, 270) if score_a <= score_b else (90, 210, 330)
+
+    def _angular_diff(a: float, b: float) -> float:
+        return abs((a - b + 180) % 360 - 180)
+
+    def score_triplet(base: int) -> int:
+        arms = [base % 360, (base + 120) % 360, (base + 240) % 360]
+        return sum(
+            1 for lb in lib_bearings
+            if any(_angular_diff(lb, arm) < 60 for arm in arms)
+        )
+
+    best_base = min(range(0, 120, 10), key=score_triplet)
+    jitter = random.randint(-8, 8)
+    b1 = (best_base + jitter) % 360
+    return (b1, (b1 + 120) % 360, (b1 + 240) % 360)
 
 
 async def _fetch_overpass_waypoint(home: tuple, geographic_target: str) -> tuple | None:

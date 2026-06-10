@@ -179,13 +179,46 @@ def delete_strava_tokens(user_id: str):
 
 
 # ── IRL models ────────────────────────────────────────────────────────────────
+#
+# Primary store: `irl_models` table (user_id, weights_json, trained_at).
+# Fallback store: `_irl_weights` key inside `taste_profiles.profile_json`.
+# The fallback activates automatically when `irl_models` doesn't exist so the
+# feature works without running any extra Supabase migrations.
+
+
+def _save_irl_to_profile(user_id: str, weights: list):
+    """Embed IRL weights in the user's latest taste profile JSON row."""
+    profile = load_taste_profile_json(user_id) or {}
+    profile["_irl_weights"] = weights
+    get_supabase().table("taste_profiles").insert({
+        "user_id": user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "profile_json": profile,
+    }).execute()
+
+
+def _load_irl_from_profile(user_id: str) -> Optional[list]:
+    profile = load_taste_profile_json(user_id)
+    if profile:
+        return profile.get("_irl_weights")
+    return None
+
 
 def save_irl_weights(user_id: str, weights: list):
-    get_supabase().table("irl_models").upsert({
-        "user_id": user_id,
-        "weights_json": weights,
-        "trained_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    try:
+        get_supabase().table("irl_models").upsert({
+            "user_id": user_id,
+            "weights_json": weights,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+        log.info("irl_weights_saved", user_id=user_id, store="irl_models")
+    except Exception as e:
+        err = str(e).lower()
+        if "irl_models" in err or "does not exist" in err or "relation" in err or "42p01" in err:
+            log.warning("irl_models_table_missing_using_profile_fallback", error=str(e))
+            _save_irl_to_profile(user_id, weights)
+        else:
+            raise
 
 
 def load_irl_weights(user_id: str) -> Optional[list]:
@@ -199,6 +232,10 @@ def load_irl_weights(user_id: str) -> Optional[list]:
             .limit(1)
             .execute()
         )
-        return result.data[0]["weights_json"] if result.data else None
-    except Exception:
-        return None
+        if result.data:
+            return result.data[0]["weights_json"]
+    except Exception as e:
+        log.warning("irl_models_load_failed_trying_profile", error=str(e))
+
+    # Fallback: weights embedded in the taste profile
+    return _load_irl_from_profile(user_id)
