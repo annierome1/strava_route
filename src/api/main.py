@@ -341,25 +341,83 @@ def _route_to_gpx(route: dict, geojson: dict) -> str:
     )
 
 
-async def _train_irl_background(user_id: str, latlng_streams: list, gh_key: str) -> None:
+def _synthetic_irl_segments(ride_features: list) -> tuple:
     """
-    Background task: map-match GPS streams to OSM road segments then fit the
-    MaxEntropy IRL model. Saves per-user weights to Supabase.
-    Called automatically after a successful DNA build.
+    Build IRL training data from RideRouteFeatures when OSM map matching is
+    unavailable. Creates 3 RoadSegment objects per ride (flat / rolling / steep)
+    weighted by the activity's grade distribution, so the model still learns
+    grade preference from real rides.
     """
-    all_segments = []
-    trajectories = []
-    for latlng in latlng_streams:
-        try:
-            segments = await map_match_to_segments(latlng, gh_key)
-            if segments:
-                all_segments.extend(segments)
-                trajectories.append(segments)
-        except Exception as e:
-            log.warning("irl_map_match_error", error=str(e))
+    from src.builds.irl_engine.engine import RoadSegment
+    all_segs, trajectories = [], []
+    for feat in ride_features:
+        if feat.distance_km < 1:
+            continue
+        gd = feat.grade_distribution
+        turn_rad = min(feat.turn_rate / 20.0, 1.5)  # normalize turn_rate → radians
+        traj = []
+        for grade_pct, fraction, label in [
+            (0.5, gd.get("flat",    0.0), "flat"),
+            (4.0, gd.get("rolling", 0.0), "rolling"),
+            (9.0, gd.get("steep",   0.0), "steep"),
+        ]:
+            length = feat.distance_km * fraction
+            if length < 0.1:
+                continue
+            seg = RoadSegment(
+                segment_id=f"{feat.activity_id}_{label}",
+                has_cycleway=False,
+                is_paved=True,
+                avg_grade_pct=grade_pct,
+                traffic_level=1,
+                entry_turn_rad=turn_rad,
+                length_km=length,
+            )
+            traj.append(seg)
+            all_segs.append(seg)
+        if traj:
+            trajectories.append(traj)
+    return all_segs, trajectories
+
+
+async def _train_irl_background(
+    user_id: str,
+    latlng_streams: list,
+    gh_key: str,
+    ride_features: Optional[list] = None,
+) -> None:
+    """
+    Background task: fit the MaxEntropy IRL model and save weights to Supabase.
+
+    Tries OSM map-matching via GraphHopper first. Falls back to synthetic
+    segments derived from ride grade-distribution data if GH is unavailable
+    or returns no matches. Always runs as long as ride_features are provided.
+    """
+    all_segments: list = []
+    trajectories: list = []
+
+    if gh_key and latlng_streams:
+        for latlng in latlng_streams:
+            try:
+                segments = await map_match_to_segments(latlng, gh_key)
+                if segments:
+                    all_segments.extend(segments)
+                    trajectories.append(segments)
+            except Exception as e:
+                log.warning("irl_map_match_error", error=str(e))
+        if trajectories:
+            log.info("irl_using_osm_segments", user_id=user_id, n_trajectories=len(trajectories))
+
+    if not trajectories:
+        if ride_features:
+            all_segments, trajectories = _synthetic_irl_segments(ride_features)
+            log.info("irl_using_synthetic_segments", user_id=user_id, n_trajectories=len(trajectories))
+        else:
+            log.info("irl_background_skipped", user_id=user_id, reason="no_training_data")
+            return
 
     if not trajectories or not all_segments:
-        log.info("irl_background_skipped", user_id=user_id, reason="no_map_match_data")
+        log.info("irl_background_skipped", user_id=user_id, reason="empty_segments")
         return
 
     model = MaxEntropyIRL()
@@ -715,6 +773,18 @@ async def training_route(req: TrainingRouteRequest, user_id: str = Depends(get_c
     return result
 
 
+@app.get("/irl/status")
+async def irl_status(user_id: str = Depends(get_current_user)):
+    """Return whether the IRL model has been trained and what it learned."""
+    weights = load_irl_weights(user_id)
+    if not weights:
+        return {"trained": False, "message": "No IRL model yet — rebuild your Route DNA to train one."}
+    import numpy as np
+    model = MaxEntropyIRL()
+    model.weights = np.array(weights)
+    return {"trained": True, **model.explain_weights()}
+
+
 @app.post("/irl/train")
 async def irl_train(user_id: str = Depends(get_current_user)):
     activities = await strava.get_all_cycling_activities()
@@ -823,14 +893,14 @@ async def build_dna(background_tasks: BackgroundTasks, user_id: str = Depends(ge
 
     save_taste_profile_json(user_id, taste_profile_to_dict(taste))
 
-    # Schedule IRL training in background — map-matches GPS streams to OSM road segments.
-    # Does not block this response; weights are available for the next route generation.
+    # Always schedule IRL training — uses OSM map-matching when GH key is available,
+    # synthetic grade-distribution segments otherwise. Does not block this response.
     gh_key = os.environ.get("GRAPHHOPPER_API_KEY", "")
-    if gh_key and latlng_streams:
-        background_tasks.add_task(
-            _train_irl_background, user_id, latlng_streams[:10], gh_key
-        )
-        log.info("irl_training_scheduled", n_streams=min(len(latlng_streams), 10))
+    background_tasks.add_task(
+        _train_irl_background, user_id, latlng_streams[:10], gh_key, features[:10]
+    )
+    log.info("irl_training_scheduled", n_streams=len(latlng_streams[:10]),
+             n_features=len(features[:10]), has_gh_key=bool(gh_key))
 
     return {"taste_profile": taste_profile_to_dict(taste), "rides_analyzed": len(features)}
 
